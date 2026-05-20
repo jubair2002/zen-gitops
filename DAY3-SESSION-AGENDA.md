@@ -21,97 +21,155 @@
 
 ## Section 1 (10 min): Why Raw Manifests Don't Scale
 
-### The math
+In Day 2 we wrote one `deployment.yaml` per service and applied it with `kubectl`.
+That works fine for one service in one environment. It breaks down fast.
 
-9 services × 4–5 manifest files each = ~42 files for dev alone.
-× 3 environments (dev / qa / prod) = **~126 raw YAML files** to maintain.
+---
 
-### What breaks at scale
+### The problem — copy-paste at scale
 
-| Change | Impact with raw manifests |
+We have **9 services** and **3 environments** (dev / qa / prod).
+
+Each service needs roughly 4–5 manifest files:
+`deployment.yaml`, `service.yaml`, `configmap.yaml`, `ingress.yaml`, `serviceaccount.yaml`
+
+```
+9 services × 5 files = 45 files  (just for dev)
+45 files   × 3 envs  = 135 files  (total)
+```
+
+Every one of those 135 files has the service name, namespace, image tag, and resource limits hardcoded.
+
+---
+
+### What happens when something needs to change
+
+| Change | What you actually have to do |
 |---|---|
-| Image tag update | Edit 9 `deployment.yaml` files per environment |
-| Change readiness probe timeout | Edit 9 files per environment |
-| Add a new environment (staging) | Copy and rename ~42 files |
-| One env drifts from another | Nobody notices until prod breaks |
+| New image tag | Open and edit 9 `deployment.yaml` files per environment |
+| Increase memory limit | Edit 9 files per environment |
+| Add a staging environment | Copy all 45 files, rename every hardcoded value |
+| Dev and prod configs drift | Nobody notices — until prod breaks |
 
-### Transition
+---
 
-Helm solves this with **one template + one values file per service per environment**.
-25 values files replace ~126 raw manifest files — and all templating is centralized.
+### The fix — one template, many values files
+
+Instead of 135 files with hardcoded values, Helm gives us:
+
+- **1 template** — the structure, shared by all services
+- **1 values file per service per environment** — just the differences
+
+```
+Before:  135 raw YAML files
+After:   5 templates  +  25 values files  =  30 files total
+```
+
+Change the memory limit once in the template → all 9 services in all 3 environments pick it up.
 
 ---
 
 ## Section 2 (10 min): Helm Chart Anatomy
 
-### Directory structure
+A Helm chart is just **three things working together**:
+
+| File | Role |
+|---|---|
+| `Chart.yaml` | Who am I? (name, version) |
+| `values.yaml` | What are my defaults? |
+| `templates/*.yaml` | What do I render? |
+
+---
+
+### The minimal structure
 
 ```
 helm-charts/
-├── Chart.yaml          ← chart metadata (name, version, appVersion)
-├── values.yaml         ← shared defaults — every service inherits these
+├── Chart.yaml       ← chart identity
+├── values.yaml      ← default values (shared across all services)
 └── templates/
-    ├── deployment.yaml
-    ├── service.yaml
-    ├── configmap.yaml
-    ├── serviceaccount.yaml
-    ├── ingress.yaml
-    ├── hpa.yaml
-    └── _helpers.tpl
+    └── deployment.yaml   ← your k8s manifest with {{ .Values.xxx }} placeholders
 ```
 
-### Chart.yaml — actual content
+That's it. A valid Helm chart needs only these three things.
+
+---
+
+### Chart.yaml — the four fields that matter
 
 ```yaml
 apiVersion: v2
 name: pharma-service
-description: Common Helm chart for Pharma microservices
-type: application
+description: Common Helm chart for all Pharma microservices
 version: 1.0.0
-appVersion: "1.0.0"
-keywords:
-  - pharma
-  - microservice
-  - java
-  - spring-boot
-maintainers:
-  - name: Pharma DevOps Team
-    email: devops@pharma.com
 ```
 
-- `name: pharma-service` — one chart shared by all 9 services
-- `version: 1.0.0` — chart schema version (bumped when templates change)
-- `appVersion: "1.0.0"` — default app version (overridden per service by `image.tag` in values)
+- `name` — what `helm install` calls this chart
+- `version` — the chart's own version (bump when templates change)
 
-### Per-environment values structure
+Everything else (`keywords`, `maintainers`) is optional metadata.
+
+---
+
+### How the three files connect
+
+```
+Chart.yaml          → tells Helm the chart name
+values.yaml         → supplies default values
+templates/deployment.yaml → uses {{ .Values.xxx }} to read those values
+                             ↓
+                    helm template → renders final YAML → kubectl apply
+```
+
+When you run `helm install`, Helm reads `Chart.yaml`, merges `values.yaml` with any override file you pass (`-f envs/dev/values-api-gateway.yaml`), then renders every file in `templates/`.
+
+---
+
+### Our full chart — same structure, more templates
+
+```
+helm-charts/
+├── Chart.yaml
+├── values.yaml          ← shared defaults for all 9 services
+└── templates/
+    ├── deployment.yaml
+    ├── service.yaml
+    ├── configmap.yaml
+    ├── ingress.yaml
+    └── serviceaccount.yaml
+```
+
+**One chart. Nine services. Per-environment differences live only in the values files.**
 
 ```
 envs/
-├── dev/   (9 values files)
-├── qa/    (8 values files)
-└── prod/  (8 values files)
+├── dev/    ← 9 values files (one per service)
+├── qa/     ← 8 values files
+└── prod/   ← 8 values files
 ```
 
-**25 values files replace ~126 raw manifest files.**
+25 values files replace the ~126 raw manifest files from Day 2.
 
 ---
 
 ## Section 3 (15 min): Migration: api-gateway deployment.yaml → Helm
 
-### Before: raw manifest (Day 2)
+The idea is simple: **replace every hardcoded value with a `{{ .Values.xxx }}` placeholder.**
+The values file then drives what gets rendered — per service, per environment.
+
+### Step 1 — The raw manifest (Day 2)
+
+Three things are hardcoded that we need to change per service or per environment:
 
 ```yaml
 # lab2/manifests/api-gateway/deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: api-gateway          # ← hardcoded: must copy-paste for every service
-  namespace: dev             # ← hardcoded: must edit for qa/prod
-  labels:
-    app: api-gateway
-    env: dev
+  name: api-gateway                                                    # hardcoded
+  namespace: dev                                                       # hardcoded
 spec:
-  replicas: 1                # ← hardcoded: no way to differ by environment
+  replicas: 1                                                          # hardcoded
   selector:
     matchLabels:
       app: api-gateway
@@ -119,49 +177,17 @@ spec:
     metadata:
       labels:
         app: api-gateway
-        env: dev
     spec:
-      serviceAccountName: api-gateway
-      securityContext:
-        fsGroup: 2000
-        runAsNonRoot: true
-        runAsUser: 1000
-      terminationGracePeriodSeconds: 30
       containers:
-        - name: pharma-service
-          image: 516209541629.dkr.ecr.us-east-1.amazonaws.com/api-gateway:sha-ef1ccc7
-          #      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-          #      hardcoded: CI must find-and-replace this string in the file
-          imagePullPolicy: Always
+        - name: api-gateway
+          image: 516209541629.dkr.ecr.us-east-1.amazonaws.com/api-gateway:sha-ef1ccc7  # hardcoded
           ports:
-            - name: http
-              containerPort: 8080
-              protocol: TCP
-          envFrom:
-            - configMapRef:
-                name: api-gateway
-            - secretRef:
-                name: db-credentials
-            - secretRef:
-                name: jwt-secret
+            - containerPort: 8080
           livenessProbe:
             httpGet:
               path: /actuator/health
               port: 8080
-            initialDelaySeconds: 60   # ← hardcoded: changing this means editing 9 files
-            periodSeconds: 15
-            timeoutSeconds: 5
-            failureThreshold: 3
-            successThreshold: 1
-          readinessProbe:
-            httpGet:
-              path: /actuator/health/readiness
-              port: 8080
-            initialDelaySeconds: 30
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
-            successThreshold: 1
+            initialDelaySeconds: 60                                    # hardcoded
           resources:
             requests:
               cpu: 100m
@@ -169,122 +195,74 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
-          volumeMounts:
-            - name: tmp
-              mountPath: /tmp
-      volumes:
-        - name: tmp
-          emptyDir: {}
 ```
 
-### After: Helm template
+**The problem:** changing `replicas` or the image tag means editing this file for every service in every environment — 9 services × 3 environments = 27 edits for a single change.
+
+---
+
+### Step 2 — The Helm template (same file, values extracted)
+
+Replace each hardcoded value with `{{ .Values.<key> }}`:
 
 ```yaml
 # helm-charts/templates/deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "pharma-service.fullname" . }}
-  # ^^^ resolves to fullnameOverride from values — same chart works for all 9 services
-  labels:
-    {{- include "pharma-service.labels" . | nindent 4 }}
+  name: {{ .Values.appName }}             # ← was: api-gateway
+  namespace: {{ .Values.namespace }}      # ← was: dev
 spec:
-  {{- if not .Values.autoscaling.enabled }}
-  replicas: {{ .Values.replicaCount }}
-  # ^^^ driven by values: dev=1, prod=3 — change in one place
-  {{- end }}
+  replicas: {{ .Values.replicaCount }}    # ← was: 1
   selector:
     matchLabels:
-      {{- include "pharma-service.selectorLabels" . | nindent 6 }}
+      app: {{ .Values.appName }}
   template:
     metadata:
-      annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        {{- with .Values.podAnnotations }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
       labels:
-        {{- include "pharma-service.selectorLabels" . | nindent 8 }}
+        app: {{ .Values.appName }}
     spec:
-      serviceAccountName: {{ include "pharma-service.serviceAccountName" . }}
-      securityContext:
-        {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       containers:
-        - name: {{ .Chart.Name }}
-          securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-          #        ^^^^^^^^^^^^^^^^^^^^^^^^^^    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-          #        ECR repo from values          tag from values — CI writes sha-abc123 here
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+        - name: {{ .Values.appName }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"  # ← was: hardcoded ECR URL
           ports:
-            - name: http
-              containerPort: {{ .Values.service.targetPort }}
-              protocol: TCP
-          {{- if or .Values.configmap .Values.envFrom }}
-          envFrom:
-            {{- if .Values.configmap }}
-            - configMapRef:
-                name: {{ include "pharma-service.fullname" . }}
-            {{- end }}
-            {{- with .Values.envFrom }}
-            {{- toYaml . | nindent 12 }}
-            # ^^^ envFrom entries (secretRefs) passed through verbatim from values
-            {{- end }}
-          {{- end }}
+            - containerPort: {{ .Values.service.port }}
           livenessProbe:
             httpGet:
-              path: {{ .Values.livenessProbe.path }}
-              port: {{ .Values.livenessProbe.port }}
-            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
-            # ^^^ change probe timeout for all 9 services by editing values.yaml once
-            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
-            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
-            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
-            successThreshold: {{ .Values.livenessProbe.successThreshold }}
-          readinessProbe:
-            httpGet:
-              path: {{ .Values.readinessProbe.path }}
-              port: {{ .Values.readinessProbe.port }}
-            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
-            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
-            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
-            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
-            successThreshold: {{ .Values.readinessProbe.successThreshold }}
+              path: /actuator/health
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}  # ← was: 60
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
-          {{- with .Values.volumeMounts }}
-          volumeMounts:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-      {{- with .Values.volumes }}
-      volumes:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+            requests:
+              cpu: {{ .Values.resources.requests.cpu }}
+              memory: {{ .Values.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu }}
+              memory: {{ .Values.resources.limits.memory }}
 ```
 
-### The values file drives the differences
+The template is **identical in structure** to the raw manifest. The only change is swapping hardcoded strings for `{{ .Values.xxx }}` placeholders.
+
+---
+
+### Step 3 — The values file fills in the blanks
 
 ```yaml
 # envs/dev/values-api-gateway.yaml
+appName: api-gateway
+namespace: dev
 replicaCount: 1
-fullnameOverride: api-gateway
+
 image:
   repository: 516209541629.dkr.ecr.us-east-1.amazonaws.com/api-gateway
-  tag: sha-ef1ccc7
-  pullPolicy: Always
+  tag: sha-ef1ccc7        # ← CI updates only this line on every build
+
 service:
-  type: ClusterIP
   port: 8080
-  targetPort: 8080
-ingress:
-  enabled: true
-  className: nginx
-  annotations: {}
-  host: ""
-  path: /api
-  pathType: Prefix
+
+livenessProbe:
+  initialDelaySeconds: 60
+
 resources:
   requests:
     cpu: 100m
@@ -292,198 +270,114 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
-autoscaling:
-  enabled: false
-  minReplicas: 1
-  maxReplicas: 3
-  targetCPUUtilizationPercentage: 70
-livenessProbe:
-  path: /actuator/health
-  port: 8080
-  initialDelaySeconds: 60
-  periodSeconds: 15
-  timeoutSeconds: 5
-  failureThreshold: 3
-  successThreshold: 1
-readinessProbe:
-  path: /actuator/health/readiness
-  port: 8080
-  initialDelaySeconds: 30
-  periodSeconds: 10
-  timeoutSeconds: 5
-  failureThreshold: 3
-  successThreshold: 1
-configmap:
-  SPRING_PROFILES_ACTIVE: dev
-  LOG_LEVEL: DEBUG
-  SERVER_PORT: "8080"
-  AUTH_SERVICE_URL: "http://auth-service:8081"
-  DRUG_CATALOG_URL: "http://drug-catalog-service:8082"
-  NOTIFICATION_URL: "http://notification-service:3000"
-  QC_SERVICE_URL: "http://qc-service:8086"
-  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,metrics,prometheus"
-envFrom:
-  - secretRef:
-      name: db-credentials
-  - secretRef:
-      name: jwt-secret
-volumeMounts:
-  - name: tmp
-    mountPath: /tmp
-volumes:
-  - name: tmp
-    emptyDir: {}
-serviceAccount:
-  create: true
-  annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::516209541629:role/pharma-dev-eks-role
-  name: api-gateway
 ```
 
-### Preview the rendered output
+---
+
+### Step 4 — Preview what Helm renders
 
 ```bash
 helm template api-gateway helm-charts/ -f envs/dev/values-api-gateway.yaml
 ```
 
-This shows the final YAML ArgoCD will `kubectl apply` — identical to the Day 2 raw manifest, but generated from a single template.
+The output is **byte-for-byte identical** to the Day 2 raw manifest. Helm just filled in the blanks.
 
-### Payoff table
+---
+
+### The payoff — one change, everywhere
 
 | Scenario | Raw manifests | Helm |
 |---|---|---|
-| Update image tag | Edit 9 `deployment.yaml` files per env | Edit 1 values file |
+| Update image tag | Edit 9 `deployment.yaml` files per env | Edit 1 values file (or CI does it) |
 | Change probe timeout | Edit 9 files per env | Edit `values.yaml` default once |
-| Add prod environment | Copy ~42 files, rename every field | Copy 9 values files |
-| Promote dev image to qa | Edit 9 qa deployment files | Edit 9 qa values files (or CI does it) |
+| Add a new environment | Copy ~42 files, rename every field | Copy 9 values files |
+
+**One template. Many values files. That's the whole idea.**
 
 ---
 
 ## Section 4 (15 min): Full Repo Structure Tour
 
+There are three folders that matter. Everything else is supporting infrastructure.
+
 ```
 zen-gitops/
-├── helm-charts/                     ← ONE chart for all 9 services
-│   ├── Chart.yaml
-│   ├── values.yaml                  ← shared defaults
-│   └── templates/
-│       ├── deployment.yaml
-│       ├── service.yaml
-│       ├── configmap.yaml
-│       ├── serviceaccount.yaml
-│       ├── ingress.yaml
-│       ├── hpa.yaml
-│       └── _helpers.tpl
-│
-├── envs/                            ← per-service per-environment values
-│   ├── dev/
-│   │   ├── values-api-gateway.yaml
-│   │   ├── values-auth-service.yaml
-│   │   ├── values-drug-catalog-service.yaml
-│   │   └── ... (9 files total)
-│   ├── qa/
-│   │   └── ... (8 files)
-│   └── prod/
-│       └── ... (8 files)
-│
-├── argocd/
-│   ├── apps/
-│   │   ├── dev/                     ← 9 ArgoCD Application CRDs
-│   │   ├── qa/                      ← 8 ArgoCD Application CRDs
-│   │   └── prod/                    ← 8 ArgoCD Application CRDs
-│   ├── install/                     ← ArgoCD install manifests
-│   └── projects/
-│       └── pharma-project.yaml      ← AppProject RBAC boundary
-│
-├── k8s/
-│   ├── external-secrets/            ← ESO ExternalSecret CRDs
-│   ├── ingress/                     ← NGINX IngressClass + controller
-│   ├── namespaces.yaml
-│   └── rbac/
-│
-├── lab1/                            ← Session 1: manual kubectl
-└── lab2/                            ← Session 2: ArgoCD + raw manifests
+├── helm-charts/   ← the ONE shared chart (templates live here)
+├── envs/          ← the values files (one per service per environment)
+└── argocd/        ← tells ArgoCD which chart + which values file to use
 ```
 
-### How an ArgoCD Application wires helm-charts + envs together
+---
+
+### helm-charts/ — the template
+
+One chart, shared by all 9 services. The templates never change per service — only the values do.
+
+```
+helm-charts/
+├── Chart.yaml
+├── values.yaml          ← safe defaults (overridden by envs/ files)
+└── templates/
+    ├── deployment.yaml
+    ├── service.yaml
+    ├── configmap.yaml
+    ├── ingress.yaml
+    └── serviceaccount.yaml
+```
+
+---
+
+### envs/ — the differences
+
+One values file per service per environment. This is the only file CI touches on a new build.
+
+```
+envs/
+├── dev/
+│   ├── values-api-gateway.yaml
+│   ├── values-auth-service.yaml
+│   └── ... (9 files)
+├── qa/    ← 8 files
+└── prod/  ← 8 files
+```
+
+---
+
+### argocd/apps/ — the wiring
+
+Each ArgoCD `Application` CRD answers two questions: **which chart?** and **which values file?**
 
 ```yaml
 # argocd/apps/dev/api-gateway-app.yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: api-gateway-dev
-  namespace: argocd
-  labels:
-    env: dev
-    app: api-gateway
-    managed-by: terraform
-  finalizers:
-    - resources-finalizer.argocd.argoproj.io
-spec:
-  project: pharma              # ← scoped to pharma AppProject RBAC boundary
+source:
+  path: helm-charts                            # ← render this chart
+  helm:
+    valueFiles:
+      - ../envs/dev/values-api-gateway.yaml   # ← with this values file
 
-  source:
-    repoURL: https://github.com/DPP-2026/zen-gitops.git
-    targetRevision: HEAD
-    path: helm-charts          # ← render THIS chart
-    helm:
-      valueFiles:
-        - ../envs/dev/values-api-gateway.yaml
-        # ^^^ with THIS values file — path is relative to repo root
-
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: dev             # ← deploy into dev namespace
-
-  syncPolicy:
-    automated:
-      prune: true              # ← delete K8s resources removed from Git
-      selfHeal: true           # ← revert manual kubectl changes automatically
-      allowEmpty: false
-    syncOptions:
-      - CreateNamespace=true
-      - PrunePropagationPolicy=foreground
-      - PruneLast=true
-    retry:
-      limit: 5
-      backoff:
-        duration: 5s
-        factor: 2
-        maxDuration: 3m
-
-  revisionHistoryLimit: 10    # ← keep last 10 syncs for rollback
+destination:
+  namespace: dev                               # ← deploy here
 ```
 
-### The full CD pipeline
+That's the entire wiring. ArgoCD renders `helm template helm-charts/ -f envs/dev/values-api-gateway.yaml` and applies the result.
+
+---
+
+### The full flow — Git push to running pod
 
 ```
-Developer pushes code to app repo
-        │
-        ▼
-GitHub Actions CI
-  ├── Build Docker image
-  ├── Push to ECR: .../api-gateway:sha-abc123
-  └── git commit: update envs/dev/values-api-gateway.yaml tag → sha-abc123
-        │ git push to zen-gitops
-        ▼
-zen-gitops repo updated
-        │ ArgoCD polls every 3 min (or GitHub webhook)
-        ▼
-ArgoCD detects api-gateway-dev is OutOfSync
-        │ helm template + kubectl apply
-        ▼
-New pod rolls out in dev namespace with sha-abc123
+Developer pushes app code
+        ↓
+CI builds image → pushes to ECR → updates image.tag in envs/dev/values-api-gateway.yaml → git push
+        ↓
+ArgoCD detects zen-gitops changed
+        ↓
+helm template + kubectl apply
+        ↓
+New pod running in dev namespace
 ```
 
-### AppProject — the security boundary
-
-`argocd/projects/pharma-project.yaml` scopes what ArgoCD can touch:
-- **sourceRepos**: only `zen-gitops` (not arbitrary repos)
-- **destinations**: only `dev`, `qa`, `prod` namespaces on this cluster
-- **clusterResourceWhitelist**: controls which cluster-level resources ArgoCD may create
-
-Without AppProject, a misconfigured Application could deploy to any namespace or any cluster ArgoCD has credentials for.
+**CI only touches Git. ArgoCD owns the cluster. No one runs `kubectl apply` or `helm upgrade` by hand.**
 
 ---
 
