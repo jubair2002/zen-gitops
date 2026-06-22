@@ -13,7 +13,7 @@ fluentbit:
   filterNamespace: dev
 
 elasticsearch:
-  host: 97f1fa5d7d9d4d58ba3926dfb84ebeb0.us-central1.gcp.cloud.es.io
+  host: my-elasticsearch-project-be5821.es.us-central1.gcp.elastic.cloud
   port: 443
   tls: true
   credentialsSecret: fluent-bit-elastic-credentials

@@ -64,11 +64,11 @@ data:
     [OUTPUT]
         Name                 es
         Match                kube.*
-        Host                 97f1fa5d7d9d4d58ba3926dfb84ebeb0.us-central1.gcp.cloud.es.io
+        Host                 my-elasticsearch-project-be5821.es.us-central1.gcp.elastic.cloud
         Port                 443
         TLS                  On
         TLS.Verify           On
-        http_api_key         ${ELASTIC_API_KEY}
+        api_key              ${ELASTIC_API_KEY}
         Logstash_Format      On
         Logstash_Prefix_Key  _service_name
         Logstash_Prefix      dev-service
