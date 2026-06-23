@@ -1,0 +1,104 @@
+# kube-prometheus-stack values
+#
+# What this file does:
+#   - Enables pod-level metrics (kube-state-metrics) and node-level metrics (node-exporter)
+#   - Stores 14 days of metrics on an EBS gp3 volume (EBS CSI driver)
+#   - NO dashboards are pre-provisioned — add them manually in Grafana
+#   - NO alert rules are pre-created — add PrometheusRule objects manually
+#   - Alertmanager is deployed but ships with no receivers — configure manually
+
+# ── Alert rules: NONE ─────────────────────────────────────────────────────────
+# Setting create: false disables every built-in PrometheusRule.
+# Add your own PrometheusRule objects in k8s/monitoring/ when ready.
+defaultRules:
+  create: false
+
+# ── Grafana ───────────────────────────────────────────────────────────────────
+grafana:
+  adminPassword: pharma-grafana-2026
+
+  persistence:
+    enabled: true
+    storageClassName: gp3-ebs-csi   # EBS CSI gp3 volume (see observability_project4/k8s/ebs-storageclass.yaml)
+    size: 5Gi
+
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - monitoring.pharma.internal
+    paths:
+      - /
+    annotations:
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+
+  # ── Dashboards: DISABLED — add via Grafana UI manually ──────────────────────
+  sidecar:
+    dashboards:
+      enabled: false    # do not auto-import ConfigMap-labelled dashboards
+  dashboardProviders: {}
+  dashboards: {}
+  plugins: []
+
+# ── Alertmanager ──────────────────────────────────────────────────────────────
+# Deployed with no receivers configured.
+# Add routing and receivers in a separate Secret/ConfigMap when you're ready.
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3-ebs-csi
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 5Gi
+
+# ── Prometheus ────────────────────────────────────────────────────────────────
+prometheus:
+  prometheusSpec:
+    # Retention: exactly 2 weeks
+    retention: 14d
+    retentionSize: "18GB"   # safety cap — keeps data within the 20 Gi PVC
+
+    # Storage backed by EBS CSI gp3 (see observability_project4/k8s/ebs-storageclass.yaml)
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3-ebs-csi
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
+
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 1200Mi
+
+    # Discover ServiceMonitors, PodMonitors, and PrometheusRules from any namespace.
+    # This lets you add monitors/rules in dev/qa/prod namespaces later.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+# ── Operator ──────────────────────────────────────────────────────────────────
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# ── Metrics collectors ────────────────────────────────────────────────────────
+kubeStateMetrics:
+  enabled: true   # pod-level metrics: replica counts, resource requests/limits, phase
+
+nodeExporter:
+  enabled: true   # node-level metrics: CPU, memory, disk I/O, network, filesystem

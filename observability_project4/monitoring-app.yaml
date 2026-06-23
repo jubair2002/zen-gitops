@@ -1,0 +1,66 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring
+  namespace: argocd
+  labels:
+    env: dev
+    app: monitoring
+    managed-by: gitops
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: pharma
+
+  sources:
+    # 1. kube-prometheus-stack Helm chart (Prometheus + Grafana + Alertmanager)
+    - repoURL: https://prometheus-community.github.io/helm-charts
+      chart: kube-prometheus-stack
+      targetRevision: 84.3.0
+      helm:
+        valueFiles:
+          - $values/observability_project4/prometheus-values.yaml
+
+    # 2. Git repo as the values source ($values ref used above)
+    - repoURL: https://github.com/DPP-2026/zen-gitops.git
+      targetRevision: HEAD
+      ref: values
+
+    # 3. Raw manifests: EBS CSI StorageClass
+    - repoURL: https://github.com/DPP-2026/zen-gitops.git
+      targetRevision: HEAD
+      path: observability_project4/k8s
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # Suppress webhook CA bundle diff noise from cert-manager rotation
+  ignoreDifferences:
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jsonPointers:
+        - /webhooks/0/clientConfig/caBundle
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      jsonPointers:
+        - /webhooks/0/clientConfig/caBundle
+
+  revisionHistoryLimit: 10
