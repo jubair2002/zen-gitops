@@ -1,17 +1,13 @@
 replicaCount: 1
-
 fullnameOverride: pharma-ui
-
 image:
   repository: 767398035572.dkr.ecr.us-east-1.amazonaws.com/pharma-ui
-  tag: sha-ef1ccc7
+  tag: sha-a58f065
   pullPolicy: Always
-
 service:
   type: ClusterIP
   port: 80
   targetPort: 80
-
 ingress:
   enabled: true
   className: nginx
@@ -21,7 +17,6 @@ ingress:
   host: qa.pharma.internal
   path: /
   pathType: Prefix
-
 resources:
   requests:
     cpu: 50m
@@ -29,13 +24,11 @@ resources:
   limits:
     cpu: 200m
     memory: 128Mi
-
 autoscaling:
   enabled: false
   minReplicas: 1
   maxReplicas: 3
   targetCPUUtilizationPercentage: 70
-
 livenessProbe:
   path: /
   port: 80
@@ -44,7 +37,6 @@ livenessProbe:
   timeoutSeconds: 5
   failureThreshold: 3
   successThreshold: 1
-
 readinessProbe:
   path: /
   port: 80
@@ -53,12 +45,10 @@ readinessProbe:
   timeoutSeconds: 5
   failureThreshold: 3
   successThreshold: 1
-
 configmap:
   API_BASE_URL: "/api"
   AUTH_BASE_URL: "/api/auth"
   ENV: qa
-
 # Nginx requires writable directories even with readOnlyRootFilesystem: true
 volumeMounts:
   - name: tmp
@@ -67,7 +57,6 @@ volumeMounts:
     mountPath: /var/cache/nginx
   - name: nginx-run
     mountPath: /var/run
-
 volumes:
   - name: tmp
     emptyDir: {}
@@ -75,7 +64,6 @@ volumes:
     emptyDir: {}
   - name: nginx-run
     emptyDir: {}
-
 serviceAccount:
   create: true
   annotations: {}
